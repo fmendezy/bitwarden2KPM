@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Convertidor de CSV Bitwarden a Kaspersky</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .container {
+            max-width: 800px;
+        }
+        .drop-zone {
+            border: 2px dashed #cbd5e0;
+            border-radius: 0.5rem;
+            padding: 2rem;
+            text-align: center;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .drop-zone.dragover {
+            background-color: #e2e8f0;
+            border-color: #a0aec0;
+        }
+        #messageArea div {
+            padding: 0.75rem 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            font-size: 0.875rem;
+        }
+        .message-success { background-color: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
+        .message-error { background-color: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+        .message-info { background-color: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
+        .btn-primary {
+            background-color: #4f46e5; color: white; padding: 0.75rem 1.5rem;
+            border-radius: 0.375rem; font-weight: 500;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .btn-primary:hover { background-color: #4338ca; }
+        .btn-primary:disabled { background-color: #a5b4fc; cursor: not-allowed; }
+        .lang-switcher a { cursor: pointer; text-decoration: underline; }
+        .lang-switcher a.active { font-weight: bold; text-decoration: none; }
+    </style>
+</head>
+<body class="bg-slate-100 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="container bg-white p-6 sm:p-8 shadow-xl rounded-lg w-full relative">
+        <div class="lang-switcher absolute top-4 right-4 text-sm text-slate-600 space-x-2">
+            <a id="lang-es" class="hover:text-slate-900">Español</a>
+            <a id="lang-en" class="hover:text-slate-900">English</a>
+        </div>
+        
+        <header class="mb-6 text-center pt-8">
+            <h1 class="text-2xl sm:text-3xl font-bold text-slate-800" data-key="main_title"></h1>
+            <p class="text-sm text-slate-600 mt-2" data-key="subtitle"></p>
+        </header>
+
+        <section class="mb-6">
+            <h2 class="text-lg font-semibold text-slate-700 mb-2" data-key="instructions_title"></h2>
+            <ol class="list-decimal list-inside text-sm text-slate-600 space-y-1">
+                <li data-key="step1"></li>
+                <li data-key="step2"></li>
+                <li data-key="step3"></li>
+                <li data-key="step4"></li>
+                <li data-key="step5"></li>
+                <li data-key="step6"></li>
+            </ol>
+        </section>
+
+        <div id="dropZone" class="drop-zone mb-6">
+            <p class="text-slate-500" data-key="drop_zone_text"></p>
+            <input type="file" id="csvFile" accept=".csv" class="block w-full text-sm text-slate-500
+                file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0
+                file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700
+                hover:file:bg-violet-100 mt-2 mx-auto max-w-xs sm:max-w-sm
+            "/>
+        </div>
+        
+        <button id="convertButton" class="w-full btn-primary mb-6" data-key="convert_button" disabled></button>
+
+        <div id="messageArea" class="mb-4"></div>
+        <div id="downloadLinkContainer" class="text-center"></div>
+
+        <footer class="mt-8 text-center">
+            <p class="text-xs text-slate-500" data-key="footer_text"></p>
+        </footer>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const csvFileInput = document.getElementById('csvFile');
+        const convertButton = document.getElementById('convertButton');
+        const downloadLinkContainer = document.getElementById('downloadLinkContainer');
+        const messageArea = document.getElementById('messageArea');
+        const dropZone = document.getElementById('dropZone');
+        const langEsButton = document.getElementById('lang-es');
+        const langEnButton = document.getElementById('lang-en');
+
+        // --- State ---
+        let bitwardenFile = null;
+        let omittedEntriesCount = 0;
+        let currentLang = 'es';
+
+        // --- Translations ---
+        const i18n = {
+            es: {
+                main_title: 'Convertidor de CSV de Bitwarden a Kaspersky',
+                subtitle: 'Sube tu archivo CSV exportado de Bitwarden para convertirlo al formato CSV compatible con Kaspersky Password Manager (<code>url,username,password,name,extra</code>).',
+                instructions_title: 'Instrucciones:',
+                step1: 'Exporta tus datos de Bitwarden en formato CSV. (No uses "export (encrypted json)").',
+                step2: 'Sube el archivo CSV usando el formulario de abajo.',
+                step3: 'Haz clic en "Convertir archivo".',
+                step4: 'Se generará un nuevo archivo CSV (<code>kaspersky_import.csv</code>) que podrás descargar e importar en Kaspersky Password Manager.',
+                step5: '<strong>Formato Kaspersky esperado:</strong> <code>url,username,password,name,extra</code>. El campo <code>url</code> es obligatorio. Las entradas sin URL en el archivo de Bitwarden serán omitidas.',
+                step6: '<strong>Importante:</strong> Revisa el archivo CSV generado. Esta herramienta solo convierte entradas de tipo "login". Las claves TOTP no se migran directamente, pero se añade una nota en el campo \'extra\'.',
+                drop_zone_text: 'Arrastra y suelta tu archivo CSV de Bitwarden aquí, o',
+                convert_button: 'Convertir archivo',
+                footer_text: 'Esta herramienta procesa los datos localmente en tu navegador. Ningún dato se envía a un servidor.',
+                msg_file_selected: (filename) => `Archivo "${filename}" seleccionado.`,
+                msg_file_dropped: (filename) => `Archivo "${filename}" arrastrado y soltado.`,
+                msg_invalid_file: 'Por favor, suelta un archivo CSV válido.',
+                msg_select_file_first: 'Por favor, selecciona un archivo CSV primero.',
+                msg_conversion_error: (error) => `Error durante la conversión: ${error}. Asegúrate de que el archivo CSV de Bitwarden sea válido.`,
+                msg_read_error: 'Error al leer el archivo.',
+                msg_invalid_header: (missing, found) => `El archivo no parece ser un CSV de Bitwarden válido. Faltan encabezados clave como: ${missing}. Encabezados encontrados: ${found}`,
+                msg_empty_csv: 'El archivo CSV parece estar vacío o solo contiene el encabezado.',
+                msg_no_logins: 'No se encontraron entradas de tipo "login" válidas para convertir (o todas fueron omitidas).',
+                msg_no_entries_processed: (omitted) => `No se procesaron entradas. Se omitieron ${omitted} entradas porque no tenían una URL.`,
+                msg_conversion_success: (processed, omitted) => {
+                    let msg = `Conversión completada. Se procesaron ${processed} entradas de tipo login.`;
+                    if (omitted > 0) {
+                        msg += ` Se omitieron ${omitted} entradas porque no tenían una URL (requerida por Kaspersky).`;
+                    }
+                    return msg;
+                }
+            },
+            en: {
+                main_title: 'Bitwarden to Kaspersky CSV Converter',
+                subtitle: 'Upload your CSV file exported from Bitwarden to convert it to the Kaspersky Password Manager compatible CSV format (<code>url,username,password,name,extra</code>).',
+                instructions_title: 'Instructions:',
+                step1: 'Export your data from Bitwarden in CSV format. (Do not use "export (encrypted json)").',
+                step2: 'Upload the CSV file using the form below.',
+                step3: 'Click the "Convert file" button.',
+                step4: 'A new CSV file (<code>kaspersky_import.csv</code>) will be generated for you to download and import into Kaspersky Password Manager.',
+                step5: '<strong>Expected Kaspersky Format:</strong> <code>url,username,password,name,extra</code>. The <code>url</code> field is mandatory. Entries without a URL in the Bitwarden file will be skipped.',
+                step6: '<strong>Important:</strong> Review the generated CSV file. This tool only converts "login" type entries. TOTP keys are not migrated directly, but a note is added to the \'extra\' field.',
+                drop_zone_text: 'Drag and drop your Bitwarden CSV file here, or',
+                convert_button: 'Convert file',
+                footer_text: 'This tool processes data locally in your browser. No data is sent to a server.',
+                msg_file_selected: (filename) => `File "${filename}" selected.`,
+                msg_file_dropped: (filename) => `File "${filename}" dropped.`,
+                msg_invalid_file: 'Please drop a valid CSV file.',
+                msg_select_file_first: 'Please select a CSV file first.',
+                msg_conversion_error: (error) => `Error during conversion: ${error}. Make sure the Bitwarden CSV file is valid.`,
+                msg_read_error: 'Error reading the file.',
+                msg_invalid_header: (missing, found) => `The file does not appear to be a valid Bitwarden CSV. Missing key headers: ${missing}. Headers found: ${found}`,
+                msg_empty_csv: 'The CSV file appears to be empty or contains only a header.',
+                msg_no_logins: 'No valid "login" type entries were found to convert (or all were skipped).',
+                msg_no_entries_processed: (omitted) => `No entries were processed. ${omitted} entries were skipped because they had no URL.`,
+                msg_conversion_success: (processed, omitted) => {
+                    let msg = `Conversion complete. ${processed} login entries were processed.`;
+                    if (omitted > 0) {
+                        msg += ` ${omitted} entries were skipped because they lacked a URL (required by Kaspersky).`;
+                    }
+                    return msg;
+                }
+            }
+        };
+
+        // --- Functions ---
+        function setLanguage(lang) {
+            currentLang = lang;
+            document.documentElement.lang = lang;
+            document.querySelectorAll('[data-key]').forEach(el => {
+                const key = el.getAttribute('data-key');
+                if (i18n[lang][key]) {
+                    el.innerHTML = i18n[lang][key];
+                }
+            });
+            langEsButton.classList.toggle('active', lang === 'es');
+            langEnButton.classList.toggle('active', lang === 'en');
+        }
+
+        function displayMessage(message, type = 'info') {
+            const messageDiv = document.createElement('div');
+            messageDiv.textContent = message;
+            messageDiv.className = `message-${type}`;
+            messageArea.innerHTML = '';
+            messageArea.appendChild(messageDiv);
+        }
+
+        function clearMessages() {
+            messageArea.innerHTML = '';
+        }
+
+        function escapeHtml(unsafe) {
+            if (unsafe === null || unsafe === undefined) return '';
+            return unsafe.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        function parseCsvLine(line) {
+            const result = [];
+            let currentField = '';
+            let inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                if (char === '"') {
+                    if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
+                        currentField += '"';
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    result.push(currentField);
+                    currentField = '';
+                } else {
+                    currentField += char;
+                }
+            }
+            result.push(currentField);
+            return result;
+        }
+
+        function parseBitwardenCsv(csvText) {
+            const lines = csvText.split(/\r\n|\n/);
+            if (lines.length < 1) {
+                return [];
+            }
+            const headerLine = lines.shift().trim();
+            if (!headerLine && lines.length === 0) {
+                return [];
+            }
+            const headers = parseCsvLine(headerLine).map(h => h.trim().replace(/^"|"$/g, ''));
+            const essentialHeaders = ['name', 'login_uri', 'login_username', 'login_password', 'type'];
+            const missingEssentialHeaders = essentialHeaders.filter(h => !headers.includes(h));
+            if (missingEssentialHeaders.length > 0) {
+                displayMessage(i18n[currentLang].msg_invalid_header(missingEssentialHeaders.join(', '), headers.join(', ')), 'error');
+                return null;
+            }
+            const objects = [];
+            lines.forEach(line => {
+                if (line.trim() === '') return;
+                const values = parseCsvLine(line);
+                const obj = {};
+                headers.forEach((header, index) => {
+                    obj[header] = values[index] || '';
+                });
+                objects.push(obj);
+            });
+            return objects;
+        }
+
+        function convertToKasperskyFormat(bitwardenObjects) {
+            const kasperskyEntries = [];
+            omittedEntriesCount = 0;
+            bitwardenObjects.forEach(bwEntry => {
+                if (bwEntry.type && bwEntry.type.toLowerCase() === 'login') {
+                    if (!bwEntry.login_uri || bwEntry.login_uri.trim() === '') {
+                        omittedEntriesCount++;
+                        return;
+                    }
+                    let extraInfo = bwEntry.notes || '';
+                    if (bwEntry.folder) {
+                        extraInfo = `Carpeta: ${bwEntry.folder}${extraInfo ? ' - ' + extraInfo : ''}`;
+                    }
+                    if (bwEntry.login_totp && bwEntry.login_totp.trim() !== '') {
+                        extraInfo += `${extraInfo ? ' | ' : ''}TOTP: [Manual Transfer Required]`;
+                    }
+                    kasperskyEntries.push({
+                        url: bwEntry.login_uri,
+                        username: bwEntry.login_username || '',
+                        password: bwEntry.login_password || '',
+                        name: bwEntry.name || '',
+                        extra: extraInfo.trim()
+                    });
+                }
+            });
+            return kasperskyEntries;
+        }
+
+        function generateKasperskyCsv(kasperskyData) {
+            if (kasperskyData.length === 0) return "";
+            const headers = ['url', 'username', 'password', 'name', 'extra'];
+            const headerRow = headers.join(',');
+            const escapeCsvField = (field) => {
+                if (field === null || field === undefined) return '';
+                let stringField = String(field);
+                if (stringField.includes(',') || stringField.includes('\n') || stringField.includes('\r') || stringField.includes('"')) {
+                    stringField = stringField.replace(/"/g, '""');
+                    stringField = `"${stringField}"`;
+                }
+                return stringField;
+            };
+            const rows = kasperskyData.map(entry => headers.map(header => escapeCsvField(entry[header])).join(','));
+            return [headerRow, ...rows].join('\r\n');
+        }
+
+        function triggerDownload(csvContent, filename) {
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // --- Event Listeners ---
+        langEsButton.addEventListener('click', () => setLanguage('es'));
+        langEnButton.addEventListener('click', () => setLanguage('en'));
+        
+        csvFileInput.addEventListener('change', (event) => {
+            bitwardenFile = event.target.files[0];
+            if (bitwardenFile) {
+                convertButton.disabled = false;
+                displayMessage(i18n[currentLang].msg_file_selected(escapeHtml(bitwardenFile.name)), 'info');
+            } else {
+                convertButton.disabled = true;
+                clearMessages();
+            }
+        });
+
+        dropZone.addEventListener('dragover', (event) => { event.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
+        dropZone.addEventListener('drop', (event) => {
+            event.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = event.dataTransfer.files;
+            if (files.length > 0) {
+                bitwardenFile = files[0];
+                if (bitwardenFile && bitwardenFile.type === "text/csv") {
+                    csvFileInput.files = files;
+                    convertButton.disabled = false;
+                    displayMessage(i18n[currentLang].msg_file_dropped(escapeHtml(bitwardenFile.name)), 'info');
+                } else {
+                    displayMessage(i18n[currentLang].msg_invalid_file, 'error');
+                    bitwardenFile = null;
+                    csvFileInput.value = '';
+                    convertButton.disabled = true;
+                }
+            }
+        });
+
+        convertButton.addEventListener('click', () => {
+            if (!bitwardenFile) {
+                displayMessage(i18n[currentLang].msg_select_file_first, 'error');
+                return;
+            }
+            clearMessages();
+            downloadLinkContainer.innerHTML = '';
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const bitwardenObjects = parseBitwardenCsv(event.target.result);
+                    if (bitwardenObjects === null) return;
+                    if (bitwardenObjects.length === 0) {
+                        displayMessage(i18n[currentLang].msg_empty_csv, 'error');
+                        return;
+                    }
+                    const kasperskyData = convertToKasperskyFormat(bitwardenObjects);
+                    if (kasperskyData.length === 0) {
+                        if (omittedEntriesCount > 0) {
+                            displayMessage(i18n[currentLang].msg_no_entries_processed(omittedEntriesCount), 'info');
+                        } else {
+                            displayMessage(i18n[currentLang].msg_no_logins, 'info');
+                        }
+                        return;
+                    }
+                    const kasperskyCsv = generateKasperskyCsv(kasperskyData);
+                    triggerDownload(kasperskyCsv, 'kaspersky_import.csv');
+                    displayMessage(i18n[currentLang].msg_conversion_success(kasperskyData.length, omittedEntriesCount), 'success');
+                } catch (error) {
+                    displayMessage(i18n[currentLang].msg_conversion_error(escapeHtml(error.message)), 'error');
+                }
+            };
+            reader.onerror = () => { displayMessage(i18n[currentLang].msg_read_error, 'error'); };
+            reader.readAsText(bitwardenFile, 'UTF-8');
+        });
+
+        // --- Initial Load ---
+        setLanguage('es');
+
+    </script>
+</body>
+</html>
